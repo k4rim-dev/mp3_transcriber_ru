@@ -1,0 +1,4 @@
+av>=14,<19
+faster-whisper==1.2.1
+sherpa-onnx>=1.12.22,<2
+tkinterdnd2>=0.4.3,<1
