@@ -10,10 +10,10 @@ from urllib.request import urlopen
 
 
 FORMATS = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".mp4")
-MODES = {"Быстрее": ("base", 1), "Точнее": ("small", 5)}
+MODES = {"Быстрее": ("base", 1), "Точнее": ("medium", 5)}
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 WHISPER_FILES = ("config.json", "tokenizer.json", "vocabulary.txt", "model.bin")
-WHISPER_MB = {"base": 148, "small": 486}
+WHISPER_MB = {"base": 148, "medium": 1530}
 SAMPLE_RATE = 16_000
 RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 SEGMENTATION = "sherpa-onnx-pyannote-segmentation-3-0"
