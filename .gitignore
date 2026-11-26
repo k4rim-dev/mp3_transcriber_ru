@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 models/
+/Транскриптор.exe
+/_internal/
+/build/

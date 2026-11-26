@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import tkinter as tk
-from collections import deque
 from pathlib import Path
 from queue import Empty
 from tempfile import TemporaryDirectory
@@ -25,7 +24,9 @@ class App(TkinterDnD.Tk):
         self.timestamps = tk.BooleanVar()
         self.speakers = tk.BooleanVar()
         self.status = tk.StringVar(value="Ожидаю файлы")
-        self.pending = deque()
+        self.pending = []
+        self.queue_waiting = False
+        self.sources = {}
         self.finished = {}
         self.active = None
         self.process = None
@@ -51,7 +52,7 @@ class App(TkinterDnD.Tk):
         content = ttk.Frame(self, padding=20)
         content.pack(fill="both", expand=True)
         drop = tk.Label(
-            content, text="Перетащи аудио или видео сюда", height=4,
+            content, text="Перетащи аудио или видео сюда", pady=22,
             font=("TkDefaultFont", 14, "bold"), bg="#e2ebff", fg="#18356c",
             highlightthickness=1, highlightbackground="#b5c8f6",
         )
@@ -68,7 +69,7 @@ class App(TkinterDnD.Tk):
 
         table = ttk.Frame(content)
         table.pack(fill="both", expand=True)
-        self.rows = ttk.Treeview(table, columns=("file", "state"), show="headings", selectmode="browse")
+        self.rows = ttk.Treeview(table, columns=("file", "state"), show="headings", selectmode="extended")
         self.rows.heading("file", text="Файл", anchor="w")
         self.rows.heading("state", text="Состояние", anchor="w")
         self.rows.column("file", width=320, minwidth=185)
@@ -78,13 +79,13 @@ class App(TkinterDnD.Tk):
         scrollbar.pack(side="right", fill="y")
         self.rows.pack(side="left", fill="both", expand=True)
         self.rows.bind("<Double-1>", self.open_row)
-        self.rows.bind("<<TreeviewSelect>>", self.update_open_button)
+        self.rows.bind("<<TreeviewSelect>>", self.update_buttons)
         for target in (drop, self.rows):
             target.drop_target_register(DND_FILES)
             target.dnd_bind("<<Drop>>", self.drop_files)
 
         footer = ttk.Frame(content)
-        footer.pack(fill="x", pady=(12, 0))
+        footer.pack(side="bottom", fill="x", pady=(12, 0), before=table)
         self.open_button = ttk.Button(footer, text="Открыть TXT", command=self.open_row, state="disabled")
         self.open_button.pack(side="right", padx=(12, 0))
         self.cancel_button = ttk.Button(
@@ -94,6 +95,25 @@ class App(TkinterDnD.Tk):
         ttk.Label(footer, textvariable=self.status).pack(anchor="w")
         self.progress = ttk.Progressbar(footer)
         self.progress.pack(fill="x", pady=(6, 0))
+
+        queue_controls = ttk.Frame(content)
+        queue_controls.pack(fill="x", pady=(0, 6), before=table)
+        self.repeat_button = ttk.Button(
+            queue_controls, text="Повторить", command=self.repeat_selected, state="disabled",
+        )
+        self.repeat_button.pack(side="left")
+        self.up_button = ttk.Button(
+            queue_controls, text="↑", width=3, command=lambda: self.move_selected(-1), state="disabled",
+        )
+        self.up_button.pack(side="left", padx=(8, 4))
+        self.down_button = ttk.Button(
+            queue_controls, text="↓", width=3, command=lambda: self.move_selected(1), state="disabled",
+        )
+        self.down_button.pack(side="left")
+        self.start_button = ttk.Button(
+            queue_controls, text="Запустить очередь", command=self.resume_queue, state="disabled",
+        )
+        self.start_button.pack(side="right")
 
     def pick(self):
         patterns = tuple(f"*{suffix}" for suffix in FORMATS)
@@ -105,8 +125,11 @@ class App(TkinterDnD.Tk):
         self.add_files(self.tk.splitlist(event.data))
         return COPY
 
+    def current_options(self):
+        return Options(self.mode.get(), self.timestamps.get(), self.speakers.get())
+
     def add_files(self, filenames):
-        options = Options(self.mode.get(), self.timestamps.get(), self.speakers.get())
+        options = self.current_options()
         for filename in filenames:
             path = Path(filename).absolute()
             row = self.rows.insert("", "end", values=(path.name, "В очереди"))
@@ -114,14 +137,59 @@ class App(TkinterDnD.Tk):
                 self.finished[row] = "Выбери файл MP3, M4A, WAV, OGG, OPUS, FLAC или MP4."
                 self.rows.set(row, "state", "Формат не поддерживается или файл недоступен")
             else:
+                self.sources[row] = path
                 self.pending.append((row, path, options))
         self.start_next()
-        self.update_open_button()
+        self.update_buttons()
+
+    def repeat_selected(self):
+        selected = set(self.rows.selection())
+        rows = [
+            row for row in self.rows.get_children()
+            if row in selected and row in self.sources and row in self.finished
+        ]
+        if not rows:
+            return
+        self.queue_waiting = True
+        options = self.current_options()
+        for row in rows:
+            del self.finished[row]
+            self.pending.append((row, self.sources[row], options))
+            self.rows.set(row, "state", "В очереди")
+            self.rows.move(row, "", "end")
+        self.rows.see(rows[0])
+        self.start_next()
+        self.update_buttons()
+
+    def move_selected(self, direction):
+        selected = set(self.rows.selection())
+        indices = range(1, len(self.pending)) if direction < 0 else range(len(self.pending) - 2, -1, -1)
+        for index in indices:
+            neighbor = index + direction
+            if self.pending[index][0] in selected and self.pending[neighbor][0] not in selected:
+                self.pending[index], self.pending[neighbor] = self.pending[neighbor], self.pending[index]
+
+        pending_rows = [job[0] for job in self.pending]
+        pending_set = set(pending_rows)
+        other_rows = [row for row in self.rows.get_children() if row not in pending_set]
+        self.rows.set_children("", *other_rows, *pending_rows)
+        if pending_rows:
+            self.rows.see(next((row for row in pending_rows if row in selected), pending_rows[0]))
+        self.update_buttons()
+
+    def resume_queue(self):
+        self.queue_waiting = False
+        self.start_next()
+        self.update_buttons()
 
     def start_next(self):
         if self.active is not None or not self.pending:
             return
-        self.active, source, options = self.pending.popleft()
+        if self.queue_waiting:
+            self.status.set("Очередь ждёт запуска")
+            return
+        self.active, source, options = self.pending.pop(0)
+        self.update_buttons()
         self.cancel_button.configure(state="normal")
         self.set_progress("Запускаю обработку", None)
         self.status.set(source.name)
@@ -217,15 +285,23 @@ class App(TkinterDnD.Tk):
             self.status.set("Не удалось обработать файл")
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
-        self.update_open_button()
+        self.update_buttons()
 
-    def update_open_button(self, _event=None):
+    def update_buttons(self, _event=None):
         selected = self.rows.selection()
-        result = self.finished.get(selected[0]) if selected else None
+        result = self.finished.get(selected[0]) if len(selected) == 1 else None
         if isinstance(result, str):
             self.open_button.configure(text="Подробности", state="normal")
         else:
             self.open_button.configure(text="Открыть TXT", state="normal" if result else "disabled")
+        selected_rows = set(selected)
+        waiting = [job[0] in selected_rows for job in self.pending]
+        adjacent = list(zip(waiting, waiting[1:]))
+        repeat = any(row in self.sources and row in self.finished for row in selected)
+        self.repeat_button.configure(state="normal" if repeat else "disabled")
+        self.up_button.configure(state="normal" if (False, True) in adjacent else "disabled")
+        self.down_button.configure(state="normal" if (True, False) in adjacent else "disabled")
+        self.start_button.configure(state="normal" if self.queue_waiting and self.pending else "disabled")
 
     def open_row(self, event=None):
         selected = self.rows.selection()
@@ -269,4 +345,6 @@ class App(TkinterDnD.Tk):
 
 if __name__ == "__main__":
     mp.freeze_support()
-    App().mainloop()
+    app = App()
+    app.add_files(sys.argv[1:])
+    app.mainloop()

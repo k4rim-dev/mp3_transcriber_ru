@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 import tarfile
 import time
 from collections import defaultdict
@@ -11,7 +12,8 @@ from urllib.request import urlopen
 
 FORMATS = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".mp4")
 MODES = {"Быстрее": ("base", 1), "Точнее": ("medium", 5)}
-MODEL_DIR = Path(__file__).resolve().parent / "models"
+APP_DIR = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+MODEL_DIR = APP_DIR / "models"
 WHISPER_FILES = ("config.json", "tokenizer.json", "vocabulary.txt", "model.bin")
 WHISPER_MB = {"base": 148, "medium": 1530}
 SAMPLE_RATE = 16_000
